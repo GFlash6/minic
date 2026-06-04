@@ -5,6 +5,7 @@
 #include <BLEUtils.h>
 #include <WebServer.h>
 #include <WiFi.h>
+#include <esp_sleep.h>
 
 namespace {
 constexpr int LED_RUN = 0;
@@ -21,7 +22,9 @@ constexpr char BLE_SERVICE_UUID[] = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 constexpr char BLE_RX_UUID[] = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
 constexpr char BLE_TX_UUID[] = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
 constexpr uint32_t BLE_DISCONNECT_BEACON_GRACE_MS = 10000;
-constexpr uint32_t COMMAND_IDLE_TIMEOUT_MS = 30000;
+constexpr uint32_t COMMAND_IDLE_TIMEOUT_MS = 180000;
+constexpr uint64_t LOW_POWER_SLEEP_SLICE_US = 250000;
+constexpr bool WIFI_AP_ENABLED = false;
 
 enum LedBit : uint8_t {
   LED_BIT_RUN = 1 << 0,
@@ -94,6 +97,7 @@ uint32_t lastCommandMs = 0;
 bool commandIdleApplied = false;
 bool lastCommandWasBle = false;
 bool linkEstablished = false;
+bool lowPowerMode = false;
 String lastSource = "boot";
 
 String stateJson();
@@ -181,6 +185,19 @@ void setOutputEnabled(bool on) {
   updateLeds();
 }
 
+void enterLowPowerMode() {
+  if (lowPowerMode) return;
+  lowPowerMode = true;
+  setOutputEnabled(false);
+  esp_sleep_enable_timer_wakeup(LOW_POWER_SLEEP_SLICE_US);
+}
+
+void exitLowPowerMode() {
+  if (!lowPowerMode) return;
+  lowPowerMode = false;
+  setOutputEnabled(true);
+}
+
 void printWiring() {
   Serial.println();
   Serial.println("Clawd Mochi Tank LED output");
@@ -215,6 +232,7 @@ bool isSleepState() {
 }
 
 void markLinkActivity(const char *source) {
+  exitLowPowerMode();
   lastCommandMs = millis();
   lastCommandWasBle = strcmp(source, "ble") == 0;
   if (lastCommandWasBle) {
@@ -274,6 +292,8 @@ String stateJson() {
   json += bleConnected ? "true" : "false";
   json += ",\"linked\":";
   json += linkEstablished ? "true" : "false";
+  json += ",\"low_power\":";
+  json += lowPowerMode ? "true" : "false";
   json += ",\"last_source\":\"";
   json += lastSource;
   json += "\",\"last_ms\":";
@@ -521,9 +541,8 @@ void pollCommandIdleTimeout() {
 
   commandIdleApplied = true;
   lastCommandMs = millis();
-  lastSource = "command_timeout_beacon";
-  linkEstablished = false;
-  setAnimById("beacon", true);
+  lastSource = "command_timeout_low_power";
+  enterLowPowerMode();
   Serial.println(stateJson());
   notifyBleState();
 }
@@ -693,6 +712,12 @@ void routeState() {
 }
 
 void startWeb() {
+  if (!WIFI_AP_ENABLED) {
+    WiFi.mode(WIFI_OFF);
+    Serial.println("WiFi AP disabled");
+    return;
+  }
+
   WiFi.mode(WIFI_AP);
   WiFi.softAP(AP_SSID, AP_PASS);
   server.on("/", HTTP_GET, routeRoot);
@@ -729,7 +754,7 @@ void setup() {
   startBle();
   nextAutoCycleMs = millis() + 6000;
 
-  Serial.println("Clawd LED Tank ready. Connect WiFi: Clawd-Mochi-Tank / clawd1234");
+  Serial.println("Clawd LED Tank ready. WiFi AP is disabled; use BLE or USB serial.");
   Serial.println("Serial command examples: anim=typing, led=101, {\"leds\":\"010\"}, next, state");
   Serial.println("BLE device name: Claude-Mochi-Tank");
 }
@@ -741,11 +766,16 @@ void loop() {
     return;
   }
 
-  server.handleClient();
+  if (lowPowerMode) {
+    esp_light_sleep_start();
+  }
+
+  if (WIFI_AP_ENABLED) server.handleClient();
   pollSerialCommands();
   pollBleState();
   pollBleCommands();
   pollCommandIdleTimeout();
+  if (lowPowerMode) return;
   updateLeds();
 
   if (autoCycle && (int32_t)(millis() - nextAutoCycleMs) >= 0) {
