@@ -3,8 +3,6 @@
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
-#include <WebServer.h>
-#include <WiFi.h>
 #include <esp_sleep.h>
 
 namespace {
@@ -15,8 +13,6 @@ constexpr bool LED_ACTIVE_LOW = true;
 constexpr bool LED_CHASE_TEST = false;
 constexpr uint16_t LED_CHASE_TEST_STEP_MS = 500;
 
-constexpr char AP_SSID[] = "Clawd-Mochi-Tank";
-constexpr char AP_PASS[] = "clawd1234";
 constexpr char BLE_NAME[] = "Claude-Mochi-Tank";
 constexpr char BLE_SERVICE_UUID[] = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 constexpr char BLE_RX_UUID[] = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
@@ -24,7 +20,6 @@ constexpr char BLE_TX_UUID[] = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
 constexpr uint32_t BLE_DISCONNECT_BEACON_GRACE_MS = 10000;
 constexpr uint32_t COMMAND_IDLE_TIMEOUT_MS = 180000;
 constexpr uint64_t LOW_POWER_SLEEP_SLICE_US = 250000;
-constexpr bool WIFI_AP_ENABLED = false;
 
 enum LedBit : uint8_t {
   LED_BIT_RUN = 1 << 0,
@@ -74,7 +69,6 @@ constexpr uint8_t MANUAL_ANIM_INDEX = ANIM_COUNT - 1;
 
 const int LED_PINS[] = {LED_RUN, LED_WAIT, LED_ALERT};
 
-WebServer server(80);
 BLEServer *bleServer = nullptr;
 BLECharacteristic *bleTxCharacteristic = nullptr;
 
@@ -384,7 +378,6 @@ bool applyCommandLine(String line, const char *source) {
   } else {
     animId = valueAfter(line, "anim=");
     if (animId.length() == 0) animId = valueAfter(line, "id=");
-    if (animId.length() == 0) animId = valueAfter(line, "/anim?id=");
 
     ledsValue = valueAfter(line, "led=");
     if (ledsValue.length() == 0) ledsValue = valueAfter(line, "leds=");
@@ -559,178 +552,6 @@ void pollBleCommands() {
   taskEXIT_CRITICAL(&bleCmdMux);
   if (hasPending) applyCommandLine(String(localBuf), "ble");
 }
-
-const char INDEX_HTML[] PROGMEM = R"html(
-<!doctype html><html><head><meta name=viewport content="width=device-width,initial-scale=1">
-<title>Clawd LED Tank</title>
-<style>
-body{margin:0;background:#101216;color:#f7f1ea;font-family:system-ui,Segoe UI,sans-serif}
-main{max-width:520px;margin:auto;padding:18px}.brand{font-size:30px;font-weight:800;line-height:1;margin:8px 0 4px}
-.sub{color:#aaa;margin-bottom:18px}.panel{border:1px solid #303640;background:#171a20;border-radius:8px;padding:12px;margin-bottom:12px}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.leds{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
-button{border:1px solid #3a3f47;background:#1c2027;color:#fff;border-radius:8px;padding:14px;font:inherit}
-button.on{border-color:#ff6a3d;background:#2b1813}.wide{grid-column:1/-1}.row{display:flex;gap:10px;align-items:center}
-input[type=range]{width:100%}.hint{color:#888;font-size:13px;margin-top:14px}.status{color:#d7d2cc;font-size:14px}
-</style></head><body><main>
-<div class=brand>Clawd LED Tank</div><div class=sub>Three common-anode LEDs on the configured GPIO pins.</div>
-<div class="panel status" id=status>connecting...</div>
-<div class="panel leds">
-<button onclick="led('100')">RUN</button><button onclick="led('010')">WAIT</button><button onclick="led('001')">ALERT</button>
-<button onclick="led('110')">RUN+WAIT</button><button onclick="led('011')">WAIT+ALERT</button><button onclick="led('111')">ALL</button>
-</div>
-<div class="panel grid">
-<button onclick="anim('idle')">Idle</button><button onclick="anim('typing')">Typing</button>
-<button onclick="anim('thinking')">Thinking</button><button onclick="anim('building')">Building</button>
-<button onclick="anim('beacon')">Beacon</button><button onclick="anim('alert')">Alert</button>
-<button onclick="anim('happy')">Happy</button><button onclick="anim('disconnected')">Disconnected</button>
-<button onclick="nextAnim()">Next</button><button id=autoBtn onclick="autoMode()">Auto cycle</button>
-<button id=blBtn class=wide onclick="backlight()">LED output on/off</button>
-</div>
-<div class=panel>
-<label>Pattern speed <span id=spdText>normal</span></label>
-<div class=row><input id=spd type=range min=1 max=3 value=2 oninput="speed(this.value)"></div>
-</div>
-<div class=hint>SSID: Clawd-Mochi-Tank / password: clawd1234 / open http://192.168.4.1</div>
-</main><script>
-let state={auto:false,backlight:true,speed:2,anim:'idle',label:'Idle',mask:'000',applied:'000'};
-const speedLabels=['','slow','normal','fast'];
-async function req(p){try{const r=await fetch(p);state=await r.json();paint()}catch(e){}}
-function paint(){
-  status.textContent=state.label+' / '+state.anim+' / set '+state.mask+' / now '+state.applied;
-  autoBtn.classList.toggle('on',state.auto);
-  blBtn.classList.toggle('on',state.backlight);
-  blBtn.textContent=state.backlight?'LED output on':'LED output off';
-  spd.value=state.speed; spdText.textContent=speedLabels[state.speed]||'normal';
-}
-async function anim(id){await req('/anim?id='+encodeURIComponent(id))}
-async function led(v){await req('/leds?v='+v)}
-async function autoMode(){await req('/auto?on='+(state.auto?0:1))}
-async function backlight(){await req('/backlight?on='+(state.backlight?0:1))}
-async function speed(v){await req('/speed?v='+v)}
-async function nextAnim(){await req('/next')}
-setInterval(()=>req('/state'),1000); req('/state');
-</script></body></html>
-)html";
-
-void routeRoot() {
-  server.sendHeader("Cache-Control", "no-store");
-  server.send_P(200, "text/html", INDEX_HTML);
-}
-
-void routeAnim() {
-  if (!server.hasArg("id")) {
-    server.send(400, "application/json", "{\"ok\":0}");
-    return;
-  }
-
-  const int8_t index = findAnimIndex(server.arg("id"));
-  if (index >= 0) {
-    markLinkActivity("web");
-    setAnim(index);
-    notifyBleState();
-    server.send(200, "application/json", stateJson());
-    return;
-  }
-
-  server.send(404, "application/json", "{\"ok\":0}");
-}
-
-void routeLeds() {
-  String value = server.hasArg("v") ? server.arg("v") : server.arg("mask");
-  if (!setManualLeds(value)) {
-    server.send(400, "application/json", "{\"ok\":0}");
-    return;
-  }
-  markLinkActivity("web");
-  notifyBleState();
-  server.send(200, "application/json", stateJson());
-}
-
-void routeAuto() {
-  markLinkActivity("web");
-  autoCycle = !server.hasArg("on") || server.arg("on") != "0";
-  nextAutoCycleMs = millis() + 6000;
-  notifyBleState();
-  server.send(200, "application/json", stateJson());
-}
-
-void routeBacklight() {
-  markLinkActivity("web");
-  setOutputEnabled(!server.hasArg("on") || server.arg("on") != "0");
-  notifyBleState();
-  server.send(200, "application/json", stateJson());
-}
-
-void routeSpeed() {
-  markLinkActivity("web");
-  if (server.hasArg("v")) {
-    speedLevel = constrain(server.arg("v").toInt(), 1, 3);
-  }
-  notifyBleState();
-  server.send(200, "application/json", stateJson());
-}
-
-void routeNext() {
-  markLinkActivity("web");
-  setAnim((animIndex + 1) % (ANIM_COUNT - 1));
-  notifyBleState();
-  server.send(200, "application/json", stateJson());
-}
-
-void routeCmd() {
-  if (!server.hasArg("k") || server.arg("k").isEmpty()) {
-    server.send(400, "application/json", "{\"ok\":0}");
-    return;
-  }
-
-  const char k = server.arg("k")[0];
-  markLinkActivity("web");
-  switch (k) {
-    case 'i': setAnim(findAnimIndex("idle")); break;
-    case 't': setAnim(findAnimIndex("typing")); break;
-    case 'h': setAnim(findAnimIndex("thinking")); break;
-    case 'b': setAnim(findAnimIndex("building")); break;
-    case 'a': setAnim(findAnimIndex("alert")); break;
-    case 'w': setAnim(findAnimIndex("happy")); break;
-    case 's': setAnim(findAnimIndex("sleeping")); break;
-    case 'd': setAnim(findAnimIndex("dizzy")); break;
-    case 'n': setAnim((animIndex + 1) % (ANIM_COUNT - 1)); break;
-    case 'o':
-      autoCycle = !autoCycle;
-      nextAutoCycleMs = millis() + 6000;
-      break;
-    default:
-      server.send(404, "application/json", "{\"ok\":0}");
-      return;
-  }
-  notifyBleState();
-  server.send(200, "application/json", stateJson());
-}
-
-void routeState() {
-  server.send(200, "application/json", stateJson());
-}
-
-void startWeb() {
-  if (!WIFI_AP_ENABLED) {
-    WiFi.mode(WIFI_OFF);
-    Serial.println("WiFi AP disabled");
-    return;
-  }
-
-  WiFi.mode(WIFI_AP);
-  WiFi.softAP(AP_SSID, AP_PASS);
-  server.on("/", HTTP_GET, routeRoot);
-  server.on("/anim", HTTP_GET, routeAnim);
-  server.on("/leds", HTTP_GET, routeLeds);
-  server.on("/auto", HTTP_GET, routeAuto);
-  server.on("/backlight", HTTP_GET, routeBacklight);
-  server.on("/speed", HTTP_GET, routeSpeed);
-  server.on("/next", HTTP_GET, routeNext);
-  server.on("/cmd", HTTP_GET, routeCmd);
-  server.on("/state", HTTP_GET, routeState);
-  server.begin();
-}
 }  // namespace
 
 void setup() {
@@ -750,11 +571,10 @@ void setup() {
 
   autoCycle = false;
   setAnimById("beacon", true);
-  startWeb();
   startBle();
   nextAutoCycleMs = millis() + 6000;
 
-  Serial.println("Clawd LED Tank ready. WiFi AP is disabled; use BLE or USB serial.");
+  Serial.println("Clawd LED Tank ready. Use BLE or USB serial.");
   Serial.println("Serial command examples: anim=typing, led=101, {\"leds\":\"010\"}, next, state");
   Serial.println("BLE device name: Claude-Mochi-Tank");
 }
@@ -770,7 +590,6 @@ void loop() {
     esp_light_sleep_start();
   }
 
-  if (WIFI_AP_ENABLED) server.handleClient();
   pollSerialCommands();
   pollBleState();
   pollBleCommands();

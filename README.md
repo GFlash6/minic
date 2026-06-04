@@ -105,21 +105,11 @@ BL   -> GPIO26
 
 开机后设备会：
 
-1. 关闭 WiFi AP。
+1. 不启动 WiFi。
 2. 启动 BLE，名字是 `Claude-Mochi-Tank`。
 3. 默认进入 `beacon` 状态，表示等待连接或等待状态。
 
-当前固件默认关闭 WiFi，主要通过 BLE 或 USB 串口接收状态。
-
-如果以后重新打开 WiFi AP，默认信息是：
-
-```text
-SSID: Clawd-Mochi-Tank
-Password: clawd1234
-Web: http://192.168.4.1
-```
-
-当前关闭 WiFi 时，网页手动控制不可用。
+当前固件已经删除 WiFi/AP/WebServer 相关代码，只通过 BLE 或 USB 串口接收状态。
 
 ## 常见状态含义
 
@@ -159,9 +149,9 @@ disconnected 连接断开
 
 当前使用的是 ESP32 `light sleep`，不是 `deep sleep`。
 
-原因是 deep sleep 会让板子重启，而且 BLE/WiFi 不能保持正常接收；这个项目需要“新状态来了就恢复”，所以用 light sleep 更合适。
+原因是 deep sleep 会让板子重启，而且 BLE 不能保持正常接收；这个项目需要“新状态来了就恢复”，所以用 light sleep 更合适。
 
-当前实现里 low power 会每 250ms 定时醒来一次，检查串口、BLE 和网页请求。如果没有新状态，会继续睡。
+当前实现里 low power 会每 250ms 定时醒来一次，检查串口和 BLE。如果没有新状态，会继续睡。
 
 ## 手动发送测试命令
 
@@ -259,7 +249,7 @@ Invoke-RestMethod http://127.0.0.1:8765/state
 5. `--doctor` 是否能找到 BLE 或串口设备。
 6. 如果串口被 PlatformIO Serial Monitor 占用，Hub 可能不能再用串口发送。
 7. 如果 BLE 不稳定，可以先试 USB 串口。
-8. 当前固件默认关闭 ESP32 的 WiFi AP，所以不要用 `192.168.4.1` 网页来判断设备是否在线。
+8. 当前固件没有 WiFi AP 和网页控制，不要用 `192.168.4.1` 判断设备是否在线。
 
 ## 如果低功耗没有生效
 
@@ -268,8 +258,7 @@ Invoke-RestMethod http://127.0.0.1:8765/state
 1. 是否真的超过 3 分钟没有新状态。
 2. Hub 或 watcher 是否还在不断发送状态。
 3. 串口里是否打印了 `command_timeout_low_power`。
-4. 网页 `/state` 查询不会刷新计时，但网页按钮会刷新计时。
-5. LED 版本里如果最后状态是 `sleeping` 或 `going_away`，旧逻辑可能会阻止进入板级低功耗，需要留意当前代码状态。
+4. LED 版本里如果最后状态是 `sleeping` 或 `going_away`，旧逻辑可能会阻止进入板级低功耗，需要留意当前代码状态。
 
 ## 常用编译命令
 
