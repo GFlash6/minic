@@ -20,6 +20,7 @@ constexpr char BLE_TX_UUID[] = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
 constexpr uint32_t BLE_DISCONNECT_BEACON_GRACE_MS = 10000;
 constexpr uint32_t COMMAND_IDLE_TIMEOUT_MS = 180000;
 constexpr uint64_t LOW_POWER_SLEEP_SLICE_US = 250000;
+constexpr bool BLE_ENABLED = false;
 
 enum LedBit : uint8_t {
   LED_BIT_RUN = 1 << 0,
@@ -467,6 +468,11 @@ class TankBleRxCallbacks : public BLECharacteristicCallbacks {
 };
 
 void startBle() {
+  if (!BLE_ENABLED) {
+    Serial.println("BLE disabled");
+    return;
+  }
+
   BLEDevice::init(BLE_NAME);
   bleServer = BLEDevice::createServer();
   bleServer->setCallbacks(new TankBleServerCallbacks());
@@ -574,9 +580,8 @@ void setup() {
   startBle();
   nextAutoCycleMs = millis() + 6000;
 
-  Serial.println("Clawd LED Tank ready. Use BLE or USB serial.");
+  Serial.println("Clawd LED Tank ready. BLE is disabled; use USB serial.");
   Serial.println("Serial command examples: anim=typing, led=101, {\"leds\":\"010\"}, next, state");
-  Serial.println("BLE device name: Claude-Mochi-Tank");
 }
 
 void loop() {
@@ -591,8 +596,10 @@ void loop() {
   }
 
   pollSerialCommands();
-  pollBleState();
-  pollBleCommands();
+  if (BLE_ENABLED) {
+    pollBleState();
+    pollBleCommands();
+  }
   pollCommandIdleTimeout();
   if (lowPowerMode) return;
   updateLeds();
