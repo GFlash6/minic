@@ -106,10 +106,10 @@ BL   -> GPIO26
 开机后设备会：
 
 1. 不启动 WiFi。
-2. 启动 BLE，名字是 `Claude-Mochi-Tank`。
+2. 不启动 BLE。
 3. 默认进入 `beacon` 状态，表示等待连接或等待状态。
 
-当前固件已经删除 WiFi/AP/WebServer 相关代码，只通过 BLE 或 USB 串口接收状态。
+当前固件已经删除 WiFi/AP/WebServer 相关代码，并且暂时关闭 BLE，只通过 USB 串口接收状态。
 
 ## 常见状态含义
 
@@ -151,7 +151,7 @@ disconnected 连接断开
 
 原因是 deep sleep 会让板子重启，而且 BLE 不能保持正常接收；这个项目需要“新状态来了就恢复”，所以用 light sleep 更合适。
 
-当前实现里 low power 会每 250ms 定时醒来一次，检查串口和 BLE。如果没有新状态，会继续睡。
+当前实现里 low power 会每 250ms 定时醒来一次，检查串口。如果没有新状态，会继续睡。
 
 ## 手动发送测试命令
 
@@ -246,9 +246,9 @@ Invoke-RestMethod http://127.0.0.1:8765/state
 2. 串口监视器里有没有启动日志。
 3. Hook Hub 页面 `http://127.0.0.1:8765` 是否能打开。
 4. Hub 页面有没有收到事件。
-5. `--doctor` 是否能找到 BLE 或串口设备。
+5. `--doctor` 是否能找到串口设备。
 6. 如果串口被 PlatformIO Serial Monitor 占用，Hub 可能不能再用串口发送。
-7. 如果 BLE 不稳定，可以先试 USB 串口。
+7. 当前固件暂时关闭 BLE，只能用 USB 串口接收状态。
 8. 当前固件没有 WiFi AP 和网页控制，不要用 `192.168.4.1` 判断设备是否在线。
 
 ## 如果低功耗没有生效
