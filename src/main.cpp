@@ -6,12 +6,14 @@
 #include <esp_sleep.h>
 
 namespace {
-constexpr int LED_RUN = 0;
-constexpr int LED_WAIT = 1;
-constexpr int LED_ALERT = 2;
+constexpr int LED_RUN = 2;
+constexpr int LED_WAIT = 0;
+constexpr int LED_ALERT = 1;
 constexpr bool LED_ACTIVE_LOW = true;
 constexpr bool LED_CHASE_TEST = false;
+constexpr bool LED_SEQUENCE_TEST = false;
 constexpr uint16_t LED_CHASE_TEST_STEP_MS = 500;
+constexpr uint16_t LED_SEQUENCE_TEST_STEP_MS = 2000;
 
 constexpr char BLE_NAME[] = "Claude-Mochi-Tank";
 constexpr char BLE_SERVICE_UUID[] = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
@@ -54,12 +56,12 @@ const LedAnim ANIMS[] = {
     {"debugger", "Normal work", LED_BIT_RUN | LED_BIT_WAIT | LED_BIT_ALERT, LedPattern::Chase, 500},
     {"wizard", "Normal work", LED_BIT_RUN | LED_BIT_WAIT | LED_BIT_ALERT, LedPattern::Chase, 500},
     {"beacon", "Waiting for connection", LED_BIT_RUN | LED_BIT_WAIT | LED_BIT_ALERT, LedPattern::Chase, 100},
-    {"confused", "Waiting for confirmation", LED_BIT_RUN | LED_BIT_WAIT | LED_BIT_ALERT, LedPattern::Blink, 1000},
+    {"confused", "Waiting for confirmation", LED_BIT_WAIT, LedPattern::Steady, 1000},
     {"sweeping", "Normal work", LED_BIT_RUN | LED_BIT_WAIT | LED_BIT_ALERT, LedPattern::Chase, 500},
     {"walking", "Normal work", LED_BIT_RUN | LED_BIT_WAIT | LED_BIT_ALERT, LedPattern::Chase, 500},
     {"going_away", "Sleeping", 0, LedPattern::Steady, 1000},
     {"alert", "Waiting for confirmation", LED_BIT_RUN | LED_BIT_WAIT | LED_BIT_ALERT, LedPattern::Blink, 1000},
-    {"happy", "Task complete", LED_BIT_RUN | LED_BIT_WAIT | LED_BIT_ALERT, LedPattern::Steady, 1000},
+    {"happy", "Task complete", LED_BIT_RUN, LedPattern::Steady, 1000},
     {"sleeping", "Sleeping", 0, LedPattern::Steady, 1000},
     {"dizzy", "Error", LED_BIT_RUN | LED_BIT_WAIT | LED_BIT_ALERT, LedPattern::PairChase, 300},
     {"disconnected", "Waiting for connection", LED_BIT_RUN | LED_BIT_WAIT | LED_BIT_ALERT, LedPattern::Chase, 100},
@@ -169,6 +171,17 @@ void runLedChaseTest() {
   if (step != lastStep) {
     lastStep = step;
     Serial.print("LED test: GPIO");
+    Serial.println(LED_PINS[step]);
+  }
+  applyLedMask(1 << step);
+}
+
+void runLedSequenceTest() {
+  static uint8_t lastStep = 0xFF;
+  const uint8_t step = (millis() / LED_SEQUENCE_TEST_STEP_MS) % 3;
+  if (step != lastStep) {
+    lastStep = step;
+    Serial.print("LED sequence test: GPIO");
     Serial.println(LED_PINS[step]);
   }
   applyLedMask(1 << step);
@@ -575,6 +588,11 @@ void setup() {
     return;
   }
 
+  if (LED_SEQUENCE_TEST) {
+    Serial.println("LED sequence test mode");
+    return;
+  }
+
   autoCycle = false;
   setAnimById("beacon", true);
   startBle();
@@ -587,6 +605,12 @@ void setup() {
 void loop() {
   if (LED_CHASE_TEST) {
     runLedChaseTest();
+    delay(5);
+    return;
+  }
+
+  if (LED_SEQUENCE_TEST) {
+    runLedSequenceTest();
     delay(5);
     return;
   }
