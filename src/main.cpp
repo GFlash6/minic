@@ -6,9 +6,10 @@
 #include <esp_sleep.h>
 
 namespace {
-constexpr int LED_RUN = 2;
-constexpr int LED_WAIT = 0;
-constexpr int LED_ALERT = 1;
+constexpr int LED_RUN = 10;
+constexpr int LED_WAIT = 9;
+constexpr int LED_ALERT = 8;
+constexpr int LED_COMMON_ANODE = 7;
 constexpr bool LED_ACTIVE_LOW = true;
 constexpr bool LED_CHASE_TEST = false;
 constexpr bool LED_SEQUENCE_TEST = false;
@@ -209,7 +210,9 @@ void exitLowPowerMode() {
 void printWiring() {
   Serial.println();
   Serial.println("Clawd Mochi Tank LED output");
-  Serial.println("3 LEDs common anode -> 3V3");
+  Serial.print("3 LEDs common anode -> GPIO");
+  Serial.print(LED_COMMON_ANODE);
+  Serial.println(" (3.3V output)");
   Serial.print("LED RUN cathode   -> GPIO");
   Serial.println(LED_RUN);
   Serial.print("LED WAIT cathode  -> GPIO");
@@ -577,6 +580,9 @@ void setup() {
   Serial.begin(115200);
   delay(300);
   printWiring();
+
+  pinMode(LED_COMMON_ANODE, OUTPUT);
+  digitalWrite(LED_COMMON_ANODE, HIGH);
 
   for (uint8_t i = 0; i < 3; ++i) {
     pinMode(LED_PINS[i], OUTPUT);
