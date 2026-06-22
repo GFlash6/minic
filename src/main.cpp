@@ -3,7 +3,6 @@
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
-#include <esp_sleep.h>
 
 namespace {
 constexpr int LED_RUN = 10;
@@ -21,8 +20,6 @@ constexpr char BLE_SERVICE_UUID[] = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 constexpr char BLE_RX_UUID[] = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
 constexpr char BLE_TX_UUID[] = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
 constexpr uint32_t BLE_DISCONNECT_BEACON_GRACE_MS = 10000;
-constexpr uint32_t COMMAND_IDLE_TIMEOUT_MS = 180000;
-constexpr uint64_t LOW_POWER_SLEEP_SLICE_US = 250000;
 constexpr bool BLE_ENABLED = false;
 
 enum LedBit : uint8_t {
@@ -92,10 +89,8 @@ bool bleConnected = false;
 bool bleWasConnected = false;
 uint32_t lastBleCommandMs = 0;
 uint32_t lastCommandMs = 0;
-bool commandIdleApplied = false;
 bool lastCommandWasBle = false;
 bool linkEstablished = false;
-bool lowPowerMode = false;
 String lastSource = "boot";
 
 String stateJson();
@@ -194,19 +189,6 @@ void setOutputEnabled(bool on) {
   updateLeds();
 }
 
-void enterLowPowerMode() {
-  if (lowPowerMode) return;
-  lowPowerMode = true;
-  setOutputEnabled(false);
-  esp_sleep_enable_timer_wakeup(LOW_POWER_SLEEP_SLICE_US);
-}
-
-void exitLowPowerMode() {
-  if (!lowPowerMode) return;
-  lowPowerMode = false;
-  setOutputEnabled(true);
-}
-
 void printWiring() {
   Serial.println();
   Serial.println("Clawd Mochi Tank LED output");
@@ -237,19 +219,12 @@ bool setAnimById(const String &id, bool keepAuto = false) {
   return true;
 }
 
-bool isSleepState() {
-  const String id = ANIMS[animIndex].id;
-  return id == "sleeping" || id == "going_away";
-}
-
 void markLinkActivity(const char *source) {
-  exitLowPowerMode();
   lastCommandMs = millis();
   lastCommandWasBle = strcmp(source, "ble") == 0;
   if (lastCommandWasBle) {
     lastBleCommandMs = lastCommandMs;
   }
-  commandIdleApplied = false;
   linkEstablished = true;
   lastSource = source;
 }
@@ -303,8 +278,6 @@ String stateJson() {
   json += bleConnected ? "true" : "false";
   json += ",\"linked\":";
   json += linkEstablished ? "true" : "false";
-  json += ",\"low_power\":";
-  json += lowPowerMode ? "true" : "false";
   json += ",\"last_source\":\"";
   json += lastSource;
   json += "\",\"last_ms\":";
@@ -548,20 +521,6 @@ void pollBleState() {
   notifyBleState();
 }
 
-void pollCommandIdleTimeout() {
-  if (commandIdleApplied || lastCommandMs == 0) return;
-  if (!linkEstablished) return;
-  if (isSleepState()) return;
-  if (millis() - lastCommandMs <= COMMAND_IDLE_TIMEOUT_MS) return;
-
-  commandIdleApplied = true;
-  lastCommandMs = millis();
-  lastSource = "command_timeout_low_power";
-  enterLowPowerMode();
-  Serial.println(stateJson());
-  notifyBleState();
-}
-
 void pollBleCommands() {
   bool hasPending = false;
   char localBuf[241];
@@ -621,17 +580,11 @@ void loop() {
     return;
   }
 
-  if (lowPowerMode) {
-    esp_light_sleep_start();
-  }
-
   pollSerialCommands();
   if (BLE_ENABLED) {
     pollBleState();
     pollBleCommands();
   }
-  pollCommandIdleTimeout();
-  if (lowPowerMode) return;
   updateLeds();
 
   if (autoCycle && (int32_t)(millis() - nextAutoCycleMs) >= 0) {

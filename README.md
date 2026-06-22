@@ -102,13 +102,11 @@ led=111
 ```text
 收到有效状态
   -> 播放对应灯效
-  -> 3 分钟没有新的有效状态
-  -> 进入 lowPowerMode，关闭 LED
-  -> ESP32 进入 light sleep（每 250ms 醒来检查串口）
-  -> 收到新的有效状态 -> 退出 lowPowerMode
+  -> 收到 sleeping / going_away 状态 -> 关闭 LED，ESP32 保持运行
+  -> 收到新的有效状态 -> 立即更新 LED
 ```
 
-使用 `light sleep` 而非 `deep sleep`，原因是需要"新状态来了就恢复"，deep sleep 会让板子重启。
+固件不进入 `light sleep` 或 `deep sleep`；收到新状态后可立即更新 LED。
 
 ## 启动 Hook Hub
 
