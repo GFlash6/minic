@@ -20,7 +20,7 @@ constexpr char BLE_SERVICE_UUID[] = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 constexpr char BLE_RX_UUID[] = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
 constexpr char BLE_TX_UUID[] = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
 constexpr uint32_t BLE_DISCONNECT_BEACON_GRACE_MS = 10000;
-constexpr bool BLE_ENABLED = false;
+constexpr bool BLE_ENABLED = true;
 
 enum LedBit : uint8_t {
   LED_BIT_RUN = 1 << 0,
@@ -34,6 +34,11 @@ enum class LedPattern : uint8_t {
   Chase,
   Alternate,
   PairChase,
+};
+
+struct LedStep {
+  uint8_t mask;
+  uint16_t ms;
 };
 
 struct LedAnim {
@@ -63,10 +68,15 @@ const LedAnim ANIMS[] = {
     {"sleeping", "Sleeping", 0, LedPattern::Steady, 1000},
     {"dizzy", "Error", LED_BIT_RUN | LED_BIT_WAIT | LED_BIT_ALERT, LedPattern::PairChase, 300},
     {"disconnected", "Waiting for connection", LED_BIT_RUN | LED_BIT_WAIT | LED_BIT_ALERT, LedPattern::Chase, 100},
+    {"custom", "Custom effect", 0, LedPattern::Steady, 1000},
     {"manual", "Manual LEDs", 0, LedPattern::Steady, 1000},
 };
 constexpr uint8_t ANIM_COUNT = sizeof(ANIMS) / sizeof(ANIMS[0]);
 constexpr uint8_t MANUAL_ANIM_INDEX = ANIM_COUNT - 1;
+constexpr uint8_t CUSTOM_ANIM_INDEX = ANIM_COUNT - 2;
+constexpr uint8_t CUSTOM_STEP_MAX = 8;
+constexpr uint16_t CUSTOM_STEP_MIN_MS = 20;
+constexpr uint16_t CUSTOM_STEP_MAX_MS = 10000;
 
 const int LED_PINS[] = {LED_RUN, LED_WAIT, LED_ALERT};
 
@@ -76,6 +86,9 @@ BLECharacteristic *bleTxCharacteristic = nullptr;
 uint8_t animIndex = 0;
 uint8_t manualMask = 0;
 uint8_t appliedMask = 0xFF;
+LedStep customSteps[CUSTOM_STEP_MAX];
+uint8_t customStepCount = 0;
+uint32_t customStartedMs = 0;
 bool autoCycle = true;
 bool ledsEnabled = true;
 uint8_t speedLevel = 2;
@@ -84,7 +97,7 @@ String serialLine;
 String bleLine;
 portMUX_TYPE bleCmdMux = portMUX_INITIALIZER_UNLOCKED;
 volatile bool blePendingCmd = false;
-char blePendingBuf[241];
+char blePendingBuf[513];
 bool bleConnected = false;
 bool bleWasConnected = false;
 uint32_t lastBleCommandMs = 0;
@@ -95,6 +108,19 @@ String lastSource = "boot";
 
 String stateJson();
 bool applyCommandLine(String line, const char *source);
+uint8_t maskFromValue(const String &value, uint8_t fallback = 0);
+bool setCustomEffectFromJson(const String &line);
+
+uint16_t clampStepMs(int value) {
+  if (value < CUSTOM_STEP_MIN_MS) return CUSTOM_STEP_MIN_MS;
+  if (value > CUSTOM_STEP_MAX_MS) return CUSTOM_STEP_MAX_MS;
+  return static_cast<uint16_t>(value);
+}
+
+void setStep(LedStep &step, uint8_t mask, uint16_t ms) {
+  step.mask = mask & 0x07;
+  step.ms = ms;
+}
 
 int8_t findAnimIndex(const String &id) {
   for (uint8_t i = 0; i < ANIM_COUNT; ++i) {
@@ -118,12 +144,32 @@ void applyLedMask(uint8_t mask) {
 }
 
 uint8_t currentBaseMask() {
+  if (animIndex == CUSTOM_ANIM_INDEX) {
+    uint8_t mask = 0;
+    for (uint8_t i = 0; i < customStepCount; ++i) mask |= customSteps[i].mask;
+    return mask;
+  }
   if (animIndex == MANUAL_ANIM_INDEX) return manualMask;
   return ANIMS[animIndex].mask;
 }
 
+uint8_t customMaskForNow(uint32_t now) {
+  if (customStepCount == 0) return 0;
+  uint32_t totalMs = 0;
+  for (uint8_t i = 0; i < customStepCount; ++i) totalMs += customSteps[i].ms;
+  if (totalMs == 0) return 0;
+
+  uint32_t elapsed = (now - customStartedMs) % totalMs;
+  for (uint8_t i = 0; i < customStepCount; ++i) {
+    if (elapsed < customSteps[i].ms) return customSteps[i].mask;
+    elapsed -= customSteps[i].ms;
+  }
+  return customSteps[customStepCount - 1].mask;
+}
+
 uint8_t activeMaskForNow(uint32_t now) {
   if (!ledsEnabled) return 0;
+  if (animIndex == CUSTOM_ANIM_INDEX) return customMaskForNow(now);
 
   const LedAnim &anim = ANIMS[animIndex];
   const uint8_t baseMask = currentBaseMask();
@@ -234,16 +280,7 @@ bool setManualLeds(const String &value) {
   text.trim();
   if (text.length() == 0) return false;
 
-  uint8_t mask = 0;
-  if (text.length() == 3 && (text[0] == '0' || text[0] == '1')) {
-    for (uint8_t i = 0; i < 3; ++i) {
-      if (text[i] == '1') mask |= (1 << i);
-    }
-  } else {
-    mask = static_cast<uint8_t>(text.toInt()) & 0x07;
-  }
-
-  manualMask = mask;
+  manualMask = maskFromValue(text);
   setAnim(MANUAL_ANIM_INDEX);
   return true;
 }
@@ -318,11 +355,139 @@ String jsonValue(const String &line, const char *key) {
   return value;
 }
 
+String jsonValueInRange(const String &line, const char *key, int start, int end) {
+  if (start < 0) start = 0;
+  if (end < 0 || end > static_cast<int>(line.length())) end = line.length();
+  if (start >= end) return "";
+
+  String pattern = "\"";
+  pattern += key;
+  pattern += "\"";
+  int pos = line.indexOf(pattern, start);
+  if (pos < 0 || pos >= end) return "";
+  pos = line.indexOf(':', pos + pattern.length());
+  if (pos < 0 || pos >= end) return "";
+  ++pos;
+  while (pos < end && isspace(line[pos])) ++pos;
+
+  if (pos < end && line[pos] == '"') {
+    const int valueStart = pos + 1;
+    const int valueEnd = line.indexOf('"', valueStart);
+    return valueEnd > valueStart && valueEnd <= end ? line.substring(valueStart, valueEnd) : "";
+  }
+
+  const int valueStart = pos;
+  while (pos < end && line[pos] != ',' && line[pos] != '}') ++pos;
+  String value = line.substring(valueStart, pos);
+  value.trim();
+  return value;
+}
+
 bool truthyValue(const String &value, bool fallback) {
   if (value.length() == 0) return fallback;
   if (value == "1" || value == "true" || value == "on") return true;
   if (value == "0" || value == "false" || value == "off") return false;
   return fallback;
+}
+
+uint8_t maskFromValue(const String &value, uint8_t fallback) {
+  String text = value;
+  text.trim();
+  if (text.length() == 0) return fallback;
+
+  uint8_t mask = 0;
+  if (text.length() == 3 && (text[0] == '0' || text[0] == '1')) {
+    for (uint8_t i = 0; i < 3; ++i) {
+      if (text[i] == '1') mask |= (1 << i);
+    }
+    return mask;
+  }
+  return static_cast<uint8_t>(text.toInt()) & 0x07;
+}
+
+void applyCustomSteps(const LedStep *steps, uint8_t count) {
+  customStepCount = min<uint8_t>(count, CUSTOM_STEP_MAX);
+  for (uint8_t i = 0; i < customStepCount; ++i) customSteps[i] = steps[i];
+  customStartedMs = millis();
+  setAnim(CUSTOM_ANIM_INDEX);
+}
+
+bool setCustomPattern(const String &patternValue, const String &maskValue, uint16_t periodMs) {
+  String pattern = patternValue;
+  pattern.trim();
+  pattern.toLowerCase();
+  const uint8_t mask = maskFromValue(maskValue, LED_BIT_RUN | LED_BIT_WAIT | LED_BIT_ALERT);
+  periodMs = clampStepMs(periodMs);
+
+  LedStep steps[CUSTOM_STEP_MAX];
+  uint8_t count = 0;
+  if (pattern == "steady") {
+    setStep(steps[count++], mask, periodMs);
+  } else if (pattern == "blink") {
+    setStep(steps[count++], mask, periodMs);
+    setStep(steps[count++], 0, periodMs);
+  } else if (pattern == "chase") {
+    for (uint8_t i = 0; i < 3; ++i) {
+      const uint8_t bit = 1 << i;
+      if (mask & bit) setStep(steps[count++], bit, periodMs);
+    }
+  } else if (pattern == "alternate") {
+    setStep(steps[count++], static_cast<uint8_t>(mask & (LED_BIT_RUN | LED_BIT_ALERT)), periodMs);
+    setStep(steps[count++], static_cast<uint8_t>(mask & LED_BIT_WAIT), periodMs);
+  } else if (pattern == "pair_chase" || pattern == "pairchase") {
+    setStep(steps[count++], static_cast<uint8_t>(mask & (LED_BIT_RUN | LED_BIT_WAIT)), periodMs);
+    setStep(steps[count++], static_cast<uint8_t>(mask & (LED_BIT_WAIT | LED_BIT_ALERT)), periodMs);
+    setStep(steps[count++], static_cast<uint8_t>(mask & (LED_BIT_RUN | LED_BIT_ALERT)), periodMs);
+  } else {
+    return false;
+  }
+
+  if (count == 0) setStep(steps[count++], 0, periodMs);
+  applyCustomSteps(steps, count);
+  return true;
+}
+
+bool setCustomEffectFromJson(const String &line) {
+  if (line.indexOf("\"effect\"") < 0 && line.indexOf("\"steps\"") < 0 && line.indexOf("\"pattern\"") < 0) {
+    return false;
+  }
+
+  const int stepsKey = line.indexOf("\"steps\"");
+  if (stepsKey >= 0) {
+    const int arrayStart = line.indexOf('[', stepsKey);
+    const int arrayEnd = line.indexOf(']', arrayStart);
+    if (arrayStart < 0 || arrayEnd < 0) return false;
+
+    LedStep steps[CUSTOM_STEP_MAX];
+    uint8_t count = 0;
+    int pos = arrayStart + 1;
+    while (pos < arrayEnd && count < CUSTOM_STEP_MAX) {
+      const int objectStart = line.indexOf('{', pos);
+      if (objectStart < 0 || objectStart >= arrayEnd) break;
+      const int objectEnd = line.indexOf('}', objectStart);
+      if (objectEnd < 0 || objectEnd > arrayEnd) break;
+
+      const String maskValue = jsonValueInRange(line, "mask", objectStart, objectEnd);
+      String msValue = jsonValueInRange(line, "ms", objectStart, objectEnd);
+      if (msValue.length() == 0) msValue = jsonValueInRange(line, "duration", objectStart, objectEnd);
+      if (maskValue.length() && msValue.length()) {
+        setStep(steps[count++], maskFromValue(maskValue), clampStepMs(msValue.toInt()));
+      }
+      pos = objectEnd + 1;
+    }
+    if (count == 0) return false;
+    applyCustomSteps(steps, count);
+    return true;
+  }
+
+  String patternValue = jsonValue(line, "pattern");
+  if (patternValue.length() == 0) return false;
+  String maskValue = jsonValue(line, "mask");
+  if (maskValue.length() == 0) maskValue = "111";
+  String periodValue = jsonValue(line, "period");
+  if (periodValue.length() == 0) periodValue = jsonValue(line, "period_ms");
+  const uint16_t periodMs = periodValue.length() ? periodValue.toInt() : 300;
+  return setCustomPattern(patternValue, maskValue, periodMs);
 }
 
 String valueAfter(const String &line, const char *prefix) {
@@ -364,6 +529,12 @@ bool applyCommandLine(String line, const char *source) {
     if (speedValue.length()) {
       speedLevel = constrain(speedValue.toInt(), 1, 3);
       handled = true;
+    }
+
+    if (setCustomEffectFromJson(line)) {
+      handled = true;
+      animId = "";
+      ledsValue = "";
     }
   } else {
     animId = valueAfter(line, "anim=");
@@ -444,12 +615,12 @@ class TankBleRxCallbacks : public BLECharacteristicCallbacks {
       if (ch == '\r') continue;
       if (ch == '\n') {
         taskENTER_CRITICAL(&bleCmdMux);
-        strncpy(blePendingBuf, bleLine.c_str(), 240);
-        blePendingBuf[240] = '\0';
+        strncpy(blePendingBuf, bleLine.c_str(), 512);
+        blePendingBuf[512] = '\0';
         blePendingCmd = true;
         taskEXIT_CRITICAL(&bleCmdMux);
         bleLine = "";
-      } else if (bleLine.length() < 240) {
+      } else if (bleLine.length() < 512) {
         bleLine += ch;
       }
     }
@@ -496,7 +667,7 @@ void pollSerialCommands() {
     if (ch == '\n') {
       applyCommandLine(serialLine, "serial");
       serialLine = "";
-    } else if (serialLine.length() < 240) {
+    } else if (serialLine.length() < 512) {
       serialLine += ch;
     }
   }
@@ -523,7 +694,7 @@ void pollBleState() {
 
 void pollBleCommands() {
   bool hasPending = false;
-  char localBuf[241];
+  char localBuf[513];
   taskENTER_CRITICAL(&bleCmdMux);
   if (blePendingCmd) {
     memcpy(localBuf, blePendingBuf, sizeof(blePendingBuf));
@@ -564,7 +735,7 @@ void setup() {
   nextAutoCycleMs = millis() + 6000;
 
   Serial.println("Clawd LED Tank ready. BLE is disabled; use USB serial.");
-  Serial.println("Serial command examples: anim=typing, led=101, {\"leds\":\"010\"}, next, state");
+  Serial.println("Serial command examples: anim=typing, led=101, {\"leds\":\"010\"}, {\"effect\":{\"pattern\":\"blink\",\"mask\":\"111\",\"period\":250}}, next, state");
 }
 
 void loop() {
