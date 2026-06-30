@@ -20,7 +20,7 @@ constexpr char BLE_SERVICE_UUID[] = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 constexpr char BLE_RX_UUID[] = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
 constexpr char BLE_TX_UUID[] = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
 constexpr uint32_t BLE_DISCONNECT_BEACON_GRACE_MS = 10000;
-constexpr bool BLE_ENABLED = false;
+constexpr bool BLE_ENABLED = true;
 
 enum LedBit : uint8_t {
   LED_BIT_RUN = 1 << 0,
